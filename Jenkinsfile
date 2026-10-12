@@ -1,49 +1,61 @@
+
 pipeline {
     agent any
+
     environment {
-        IMAGE_NAME = 'abdieeuh/simple-app'
-        REGISTRY = 'https://index.docker.io/v1/'
-        REGISTRY_CREDENTIALS = 'dockerhub-credentials'
-        PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        DOCKER_HOST = "unix:///var/run/docker.sock"
+        IMAGE_NAME = 'allfridhosaragi/flask-docker-database'
+        DOCKER_CONFIG = "${WORKSPACE}\\.docker"
     }
+
     stages {
         stage('Checkout') {
             steps {
-                echo 'Melakukan checkout dari SCM...'
+                echo 'Mengambil source code dari GitHub'
                 checkout scm
             }
         }
-        stage('Build') {
+
+        stage('Check Docker') {
             steps {
-                echo 'Mulai build aplikasi'
-                sh 'echo "Build selesai ✅"'
+                bat 'docker --version'
+                bat 'docker info --format "{{.ServerVersion}}"'
             }
         }
+
         stage('Build Docker Image') {
             steps {
-                script {
-                    echo 'Membangun Docker image...'
-                    docker.build("${IMAGE_NAME}:${env.BUILD_NUMBER}")
-                    echo "Image berhasil dibuat: ${IMAGE_NAME}:${env.BUILD_NUMBER}"
-                }
+                bat 'docker build -t %IMAGE_NAME%:%BUILD_NUMBER% .'
             }
         }
+
         stage('Push Docker Image') {
             steps {
-                script {
-                    echo 'Push image ke Docker Hub...'
-                    docker.withRegistry(REGISTRY, REGISTRY_CREDENTIALS) {
-                        docker.image("${IMAGE_NAME}:${env.BUILD_NUMBER}").push()
-                        docker.image("${IMAGE_NAME}:${env.BUILD_NUMBER}").push('latest')
-                    }
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-credentials',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_TOKEN'
+                )]) {
+                    bat '''
+                        echo %DOCKER_TOKEN% | docker login -u %DOCKER_USER% --password-stdin
+                        docker push %IMAGE_NAME%:%BUILD_NUMBER%
+                        docker tag %IMAGE_NAME%:%BUILD_NUMBER% %IMAGE_NAME%:latest
+                        docker push %IMAGE_NAME%:latest
+                        docker logout
+                    '''
                 }
             }
         }
     }
+
     post {
+        success {
+            echo 'Pipeline Docker berhasil!'
+        }
+        failure {
+            echo 'Pipeline Docker gagal. Periksa Console Output.'
+        }
         always {
-            echo 'Selesai build 🏁OYYY'
+            echo 'Proses Pipeline selesai.'
         }
     }
 }
