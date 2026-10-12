@@ -4,13 +4,12 @@ pipeline {
 
     environment {
         IMAGE_NAME = 'allfridhosaragi/flask-docker-database'
-        DOCKER_CONFIG = "${WORKSPACE}\\.docker"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                echo 'Mengambil source code GitHub'
+                echo 'Mengambil source code dari GitHub'
                 checkout scm
             }
         }
@@ -25,7 +24,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 bat 'docker buildx build --load -t %IMAGE_NAME%:%BUILD_NUMBER% .'
-                bat 'docker image inspect %IMAGE_NAME%:%BUILD_NUMBER% --format "{{.Id}}"'
+                bat 'docker image inspect %IMAGE_NAME%:%BUILD_NUMBER%'
             }
         }
 
@@ -38,14 +37,69 @@ pipeline {
                 )]) {
                     powershell '''
                         $ErrorActionPreference = "Stop"
-                        $env:DOCKER_TOKEN | docker login -u $env:DOCKER_USER --password-stdin
-                        if ($LASTEXITCODE -ne 0) {
-                            throw "Docker Hub login gagal"
+
+                        $configDir = Join-Path $env:TEMP (
+                            "jenkins-docker-" + [guid]::NewGuid().ToString("N")
+                        )
+
+                        try {
+                            New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+
+                            $pair = "$($env:DOCKER_USER):$($env:DOCKER_TOKEN)"
+                            $auth = [Convert]::ToBase64String(
+                                [Text.Encoding]::UTF8.GetBytes($pair)
+                            )
+
+                            $config = @{
+                                auths = @{
+                                    "https://index.docker.io/v1/" = @{
+                                        auth = $auth
+                                    }
+                                }
+                            } | ConvertTo-Json -Depth 5
+
+                            [System.IO.File]::WriteAllText(
+                                (Join-Path $configDir "config.json"),
+                                $config,
+                                (New-Object System.Text.UTF8Encoding($false))
+                            )
+
+                            $env:DOCKER_CONFIG = $configDir
+
+                            $image = "$($env:IMAGE_NAME):$($env:BUILD_NUMBER)"
+                            $latest = "$($env:IMAGE_NAME):latest"
+
+                            Write-Host "Push image versi build..."
+
+                            docker push $image
+
+                            if ($LASTEXITCODE -ne 0) {
+                                throw "Push image versi build gagal"
+                            }
+
+                            Write-Host "Membuat tag latest..."
+
+                            docker tag $image $latest
+
+                            if ($LASTEXITCODE -ne 0) {
+                                throw "Docker tag gagal"
+                            }
+
+                            Write-Host "Push image latest..."
+
+                            docker push $latest
+
+                            if ($LASTEXITCODE -ne 0) {
+                                throw "Push latest gagal"
+                            }
+
+                            Write-Host "Seluruh Docker Push berhasil!"
+                        }
+                        finally {
+                            $env:DOCKER_CONFIG = $null
+                            Remove-Item -Recurse -Force $configDir -ErrorAction SilentlyContinue
                         }
                     '''
-                    bat 'docker push %IMAGE_NAME%:%BUILD_NUMBER%'
-                    bat 'docker tag %IMAGE_NAME%:%BUILD_NUMBER% %IMAGE_NAME%:latest'
-                    bat 'docker push %IMAGE_NAME%:latest'
                 }
             }
         }
@@ -53,13 +107,12 @@ pipeline {
 
     post {
         success {
-            echo 'Pipeline Docker berhasil!'
+            echo 'Pipeline berhasil!'
         }
         failure {
-            echo 'Pipeline Docker gagal. Periksa Console Output.'
+            echo 'Pipeline gagal. Periksa Console Output.'
         }
         always {
-            bat 'docker logout'
             echo 'Proses Pipeline selesai.'
         }
     }
